@@ -68,9 +68,10 @@ struct writer : public region
 	writer()
 		: region(), writeEnd(nullptr) {}
 
-	writer(region destination)
-		: region(destination), writeEnd(destination.startPtr)
+	writer(region destination, uint32_t amount)
+		: region(destination), writeEnd(destination.startPtr + amount)
 	{
+		assert(writeEnd <= region::endPtr);
 	}
 
 	bool has_space(uint32_t amount) const
