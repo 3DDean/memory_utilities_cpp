@@ -66,10 +66,10 @@ struct region
 struct writer : public region
 {
 	writer()
-		: region() {}
+		: region(), writeEnd(nullptr) {}
 
 	writer(region destination)
-		: region(destination)
+		: region(destination), writeEnd(destination.startPtr)
 	{
 	}
 
