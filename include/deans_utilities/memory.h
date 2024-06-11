@@ -1,8 +1,10 @@
 #pragma once
 #include "stdint.h"
-#include <vector>
-#include <stdexcept>
+#include "util/ranges.h"
+#include <cassert>
 #include <cstring>
+#include <stdexcept>
+#include <vector>
 
 namespace memory
 {
@@ -48,8 +50,12 @@ struct region
 
 	region &operator=(memory::region &&other)
 	{
-		std::swap(startPtr, other.startPtr);
-		std::swap(endPtr, other.endPtr);
+		startPtr = other.startPtr;
+		endPtr = other.endPtr;
+
+		other.startPtr = nullptr;
+		other.endPtr = nullptr;
+
 		return *this;
 	}
 
@@ -71,7 +77,7 @@ struct writer : public region
 	writer(region destination, uint32_t amount)
 		: region(destination), writeEnd(destination.startPtr + amount)
 	{
-		assert(writeEnd <= region::endPtr);
+		assert(writeEnd <= region::endPtr && "First write in memory::writer exceeds memory region size");
 	}
 
 	bool has_space(uint32_t amount) const
@@ -90,95 +96,210 @@ struct writer : public region
 	mutable uint8_t *writeEnd = nullptr;
 };
 
-// This object manages allocation and deallocation of memory regions
-struct resource : public region
+/**
+ * @brief An wrapper for handling the allocation and deallocation of memory storage regions
+ *
+ */
+struct resource
 {
+	/*! @brief unsigned integer type*/
+	using size_type = std::size_t;
+
+	/*! @brief Non-allocating default constructor*/
 	resource()
-		: region{nullptr, nullptr}
+		: resource(nullptr, 0)
 	{
 	}
 
-	resource(uint32_t size)
+	/**
+	 * @brief Allocate a region of specified size
+	 * 
+	 * @param size Size in bytes of the allocated region
+	 */
+	resource(size_type size)
 		: resource(new uint8_t[size], size)
 	{
+		assert(size != 0);
 	}
 
+	/*! @brief Move constructor */
 	resource(resource &&other)
-		: region(other.startPtr, other.endPtr)
+		: resource(other.ptr, other.size)
 	{
-		other.startPtr = nullptr;
-		other.endPtr = nullptr;
+		other.ptr = nullptr;
+		other.size = 0;
 	}
 
+	/*! @brief Deleted copy constructor, delete to avoid double free */
 	resource(const resource &other) = delete;
 
+	/*! @brief Copy assignment operator, delete to avoid double free*/
+	resource &operator=(const resource &other) = delete;
+
+	/*! @brief Move Assignment, deletes previous contents if necessary */
+	resource &operator=(resource &&other)
+	{
+		if (ptr)
+			delete ptr;
+
+		ptr = other.ptr;
+		size = other.size;
+
+		other.ptr = nullptr;
+		other.size = 0;
+
+		return *this;
+	}
+
+	/*! @brief Get a handle for the region*/
+	inline operator region() const
+	{
+		return region(ptr, ptr + size);
+	}
+
+	/*! @brief Deconstructor*/
 	virtual ~resource()
 	{
-		if (region::startPtr)
-			delete region::startPtr;
+		if (ptr)
+			delete ptr;
 	}
 
   private:
-	resource(uint8_t *ptr, uint32_t size)
-		: region(ptr, ptr + size)
+	/*! @brief Internal Constructor to help with member assignment */
+	resource(uint8_t *ptr, size_type size)
+		: ptr(ptr), size(size)
 	{
 	}
+
+	uint8_t *ptr;
+	size_type size;
 };
 
 struct resource_allocator
 {
-	void alloc_objects(uint32_t resourceSize, uint32_t amount, auto &&destItt)
-	{
-		regions.reserve(regions.size() + amount);
-		auto newRegionItt = regions.end();
-		for (size_t i = 0; i < amount; i++)
-			regions.emplace_back(resourceSize);
+	using value_type = resource;
 
-		std::copy(newRegionItt, regions.end(), destItt);
+	/**
+	 * @brief Bulk allocate memory resources
+	 * 
+	 * @param resourceSize Resource Size in bytes
+	 * @param amount Number of resource to allocate
+	 * @param dest Destination container for those resources
+	 */
+	void alloc_objects(uint32_t resourceSize, uint32_t amount, auto &&dest)
+	{
+		const uint32_t oldRegionSize = regions.size();
+		regions.resize(regions.size() + amount);
+
+		auto newRegions = std::ranges::subrange(regions.begin() + oldRegionSize, regions.end());
+
+		for (auto &element : newRegions)
+			element = std::move(resource(resourceSize));
+
+		ranges::append_range(dest, newRegions);
 	}
 
+  private:
 	std::vector<resource> regions;
 };
 
-// This object creates a pool of regions to allow for quick
+/**
+ * @brief A pool of memory allocations
+ *
+ * It's primary purpose it to allow for quick access to cache memory to then copy to and from gpu
+ *
+ * @warning Releases all allocated regions on deconstruction
+ */
 struct resource_pool
 {
-	// resourceSize and allocationAmount must not be 0
+	/**
+	 * @brief Constructor
+	 * @param resourceSize The size of allocated regions, this should not be zero
+	 * @param allocationAmount Number of regions to allocate when empty, this should not be zero
+	 *
+	 * @warning Neither parameter should be zero
+	 */
 	resource_pool(uint32_t resourceSize, uint32_t allocationAmount = 1)
 		: resourceSize(resourceSize),
 		  allocationAmount(allocationAmount)
 	{
-		if (resourceSize == 0)
-			throw std::logic_error("A memory resource pool resource size, must not be zero");
-		
-		if (allocationAmount == 0)
-			throw std::logic_error("A memory resource pool resource size, must not be zero");
+		assert(resourceSize != 0 && "Resource size cannot be zero");
+		assert(allocationAmount != 0 && "Allocation amount cannot be zero");
 
-		alloc_regions();
+		alloc_regions(allocationAmount);
 	}
 
+	/*! @brief Deconstructor, releases all allocated resources */
 	~resource_pool() {}
-	region reserve_region()
+
+	/*! @brief Acquire a region from the pool*/
+	region acquire()
 	{
 		if (available.empty())
-			alloc_regions();
+			alloc_regions(allocationAmount);
 
 		region output = available.back();
 		available.pop_back();
 		return output;
 	}
 
-	void release_region(region target)
+	/**
+	 * @brief Bulk acquire a number of regions
+	 *
+	 * @param count Number of regions needed
+	 * @return std::vector<region> acquired regions
+	 * 
+	 * @todo Determine if copy to member available and then to regions has a performance impact
+	 */
+	std::vector<region> acquire(uint32_t count)
+	{
+		assert(count != 0 && "Cannot bulk acquire zero regions");
+
+		std::vector<region> regions(count);
+
+		if (available.size() < count)
+			alloc_regions(allocationAmount + count - available.size());
+
+		const uint32_t copyStart = available.size() - count;
+
+		std::copy(available.begin() + copyStart, available.end(), regions.begin());
+
+		return std::move(regions);
+	}
+
+	/**
+	 * @brief Release a reserved region
+	 *
+	 * @param target region to be released
+	 *
+	 * @warning this does not check if region is acquired
+	 */
+	void release(region target)
 	{
 		available.push_back(target);
 	}
 
+	/**
+	 * @brief Bulk release regions
+	 *
+	 * @param regionContainer A container of regions to be released
+	 */
+	void release(auto &regionContainer)
+	{
+		assert(regionContainer.size() != 0 && "Region Container size cannot be zero");
+		ranges::append_range(available, regionContainer);
+	}
+
   private:
-	void alloc_regions()
+	/**
+	 * @brief internal helper function for bulk allocating regions
+	 *
+	 * @param allocationAmount number of regions to allocate
+	 */
+	void alloc_regions(uint32_t allocationAmount)
 	{
 		uint32_t availableSize = available.size();
-		available.resize(available.size() + allocationAmount);
-		allocator.alloc_objects(resourceSize, allocationAmount, available.begin() + availableSize);
+		allocator.alloc_objects(resourceSize, allocationAmount, available);
 	}
 
 	uint32_t resourceSize;
