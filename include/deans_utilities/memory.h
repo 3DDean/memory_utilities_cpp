@@ -96,8 +96,55 @@ struct writer : public region
 	mutable uint8_t *writeEnd = nullptr;
 };
 
+namespace unsafe
+{
+	/**
+	 * @brief This is an unsafe memory writer, please avoid using it
+	 * Internally it is just a wrapper for a pointer,
+	 */
+	struct writer
+	{
+		writer()
+			: writeDest(nullptr) {}
+
+		writer(uint8_t *start)
+			: writeDest(start)
+		{
+		}
+
+		/*! @brief Check if writer is valid*/
+		explicit operator bool() const { return writeDest; }
+
+		/*! @brief write to the pointer and advance it*/
+		void write(const void *src, uint32_t amount)
+		{
+			memcpy(writeDest, src, amount);
+			writeDest += amount;
+		}
+		
+		/*! @brief Write a string to the pointer and advance it*/
+		void write_str(const char *src, uint32_t amount)
+		{
+			std::strncpy((char*)writeDest, src, amount);
+			writeDest += amount;
+		}
+		/**
+		 * @brief Get a pointer to where this writer is pointing to
+		 * 
+		 */
+		uint8_t *get_pointer() const
+		{
+			return writeDest;
+		}
+
+	  private:
+		uint8_t *writeDest = nullptr;
+	};
+
+} // namespace unsafe
+
 /**
- * @brief An wrapper for handling the allocation and deallocation of memory storage regions
+ * @brief A memory block
  *
  */
 struct resource
@@ -113,7 +160,7 @@ struct resource
 
 	/**
 	 * @brief Allocate a region of specified size
-	 * 
+	 *
 	 * @param size Size in bytes of the allocated region
 	 */
 	resource(size_type size)
@@ -157,6 +204,17 @@ struct resource
 		return region(ptr, ptr + size);
 	}
 
+	/**
+	 * @brief Get a handle for an unsafe memory writer, avoid using this
+	 *
+	 * This should only really be used with fixed size containers, like string_array
+	 * @warning This is a memory unsafe function and probably shouldn't be used
+	 */
+	inline operator unsafe::writer() const
+	{
+		return unsafe::writer(ptr);
+	}
+
 	/*! @brief Deconstructor*/
 	virtual ~resource()
 	{
@@ -181,7 +239,7 @@ struct resource_allocator
 
 	/**
 	 * @brief Bulk allocate memory resources
-	 * 
+	 *
 	 * @param resourceSize Resource Size in bytes
 	 * @param amount Number of resource to allocate
 	 * @param dest Destination container for those resources
@@ -248,7 +306,7 @@ struct resource_pool
 	 *
 	 * @param count Number of regions needed
 	 * @return std::vector<region> acquired regions
-	 * 
+	 *
 	 * @todo Determine if copy to member available and then to regions has a performance impact
 	 */
 	std::vector<region> acquire(uint32_t count)
