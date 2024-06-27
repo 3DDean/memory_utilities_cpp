@@ -13,6 +13,18 @@ namespace memory
 	A memory region is a allocated memory range
 */
 
+/**
+ * @brief Get size of a buffer if you align the end
+ * 
+ * @param size size if buffer
+ * @param alignment alignment of object
+ * @return std::size_t aligned size
+ */
+inline std::size_t aligned_size(std::size_t size, std::size_t alignment)
+{
+	return ((size + (alignment - 1)) & ~(alignment - 1));
+}
+
 // Common class for memory operations
 struct region
 {
