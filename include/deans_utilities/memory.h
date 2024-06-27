@@ -234,6 +234,14 @@ struct resource
 			delete ptr;
 	}
 
+	/**
+	 * @brief Get a pointer to the underlying memory block
+	 */
+	inline uint8_t* get_pointer() const
+	{
+		return ptr;
+	}
+
   private:
 	/*! @brief Internal Constructor to help with member assignment */
 	resource(uint8_t *ptr, size_type size)
