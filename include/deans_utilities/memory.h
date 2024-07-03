@@ -15,7 +15,7 @@ namespace memory
 
 /**
  * @brief Get size of a buffer if you align the end
- * 
+ *
  * @param size size if buffer
  * @param alignment alignment of object
  * @return std::size_t aligned size
@@ -80,32 +80,173 @@ struct region
 	}
 };
 
-// This object allows for writing to a memory region
-struct writer : public region
+/**
+ * @brief Common functions for memory safe writer objects
+ *
+ */
+struct writer_base
 {
+	using size_type = size_t;
+	/**
+	 * @brief Construct a new writer base object
+	 *
+	 * @param writerStart Memory address where writing will start
+	 */
+	writer_base(uint8_t *writerStart)
+		: writeStart(writerStart)
+	{
+	}
+
+	/**
+	 * @brief write to underlying memory address
+	 *
+	 * @param bufferEnd Ending address for this buffer
+	 * @param src Memory address containing data to be written
+	 * @param amount Size of data to be written
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	inline bool write(uint8_t *bufferEnd, const void *src, size_type amount)
+	{
+		uint8_t *writeEnd = writeStart + amount;
+		if (writeEnd <= bufferEnd)
+		{
+			memcpy(writeStart, src, amount);
+			writeStart = writeEnd;
+
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @brief Get number of unwritten bytes on buffer
+	 *
+	 * @param bufferEnd Ending address for this buffer
+	 * @return size_type Number of unwritten bytes
+	 */
+	inline size_type bytes_remaining(const uint8_t *const bufferEnd) const
+	{
+		return bufferEnd - writeStart;
+	}
+
+  protected:
+	uint8_t *writeStart = nullptr;
+};
+
+/**
+ * @brief A writer for a memory region
+ *
+ * This object makes a memory region writable
+ *
+ */
+struct writer : public region, private writer_base
+{
+	using size_type = size_t;
+
+	/**
+	 * @brief Construct an empty writer object
+	 *
+	 */
 	writer()
-		: region(), writeEnd(nullptr) {}
+		: region(), writer_base(nullptr) {}
 
-	writer(region destination, uint32_t amount)
-		: region(destination), writeEnd(destination.startPtr + amount)
+	/**
+	 * @brief Construct a new writer object
+	 *
+	 * @param destination Writing destination region
+	 */
+	writer(region destination)
+		: region(destination), writer_base(destination.startPtr)
 	{
-		assert(writeEnd <= region::endPtr && "First write in memory::writer exceeds memory region size");
+		assert(writer_base::writeStart <= region::endPtr && "First write in memory::writer exceeds memory region size");
 	}
 
-	bool has_space(uint32_t amount) const
+	/**
+	 * @brief Write data to buffer
+	 *
+	 * @param src Pointer to start of data
+	 * @param amount Number of bytes to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	bool write(const void *src, size_type amount)
 	{
-		writeEnd = region::startPtr + amount;
-		return writeEnd <= region::endPtr;
+		return writer_base::write(region::endPtr, src, amount);
 	}
 
-	void write(const void *src, uint32_t amount)
+	/**
+	 * @brief Get number of unwritten bytes on buffer
+	 *
+	 * @return size_type bytes available to be written
+	 */
+	size_type bytes_remaining() const
 	{
-		memcpy(region::startPtr, src, amount);
-		region::startPtr = writeEnd;
+		return writer_base::bytes_remaining(region::endPtr);
+	}
+
+	/**
+	 * @brief Get number of bytes written to by this writer
+	 *
+	 * @return size_type number of bytes written
+	 */
+	size_type bytes_written() const
+	{
+		return writer_base::writeStart - region::startPtr;
+	}
+
+	/**
+	 * @brief Reset writer, ie set write start to start of region
+	 *
+	 */
+	void reset()
+	{
+		writer_base::writeStart = region::startPtr;
+	}
+};
+
+// TODO add a small write which isn't convertible to a region
+/**
+ * @brief A small memory writer
+ *
+ * It is the smallest safe memory writer that can be written with pointers
+ * You could potentially go smaller with a 32 bit int, but there you run into potential alignment issues
+ *
+ */
+struct small_writer : private writer_base
+{
+	small_writer(region destination)
+		: writer_base(destination.startPtr), bufferEnd(destination.endPtr)
+	{
+		assert(writer_base::writeStart <= bufferEnd && "First write in memory::writer exceeds memory region size");
+	}
+
+	/**
+	 * @brief Write data to buffer
+	 *
+	 * @param src Pointer to start of data
+	 * @param amount Number of bytes to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	bool write(const void *src, const uint32_t amount)
+	{
+		return writer_base::write(bufferEnd, src, amount);
+	}
+
+	/**
+	 * @brief Get number of bytes written to by this writer
+	 *
+	 * @return size_type number of bytes written
+	 */
+	bool bytes_remaining() const
+	{
+		return writer_base::bytes_remaining(bufferEnd);
 	}
 
   private:
-	mutable uint8_t *writeEnd = nullptr;
+	uint8_t *writeStart = nullptr;
+	uint8_t *bufferEnd = nullptr;
 };
 
 namespace unsafe
@@ -133,16 +274,16 @@ namespace unsafe
 			memcpy(writeDest, src, amount);
 			writeDest += amount;
 		}
-		
+
 		/*! @brief Write a string to the pointer and advance it*/
 		void write_str(const char *src, uint32_t amount)
 		{
-			std::strncpy((char*)writeDest, src, amount);
+			std::strncpy((char *)writeDest, src, amount);
 			writeDest += amount;
 		}
 		/**
 		 * @brief Get a pointer to where this writer is pointing to
-		 * 
+		 *
 		 */
 		uint8_t *get_pointer() const
 		{
@@ -237,7 +378,7 @@ struct resource
 	/**
 	 * @brief Get a pointer to the underlying memory block
 	 */
-	inline uint8_t* get_pointer() const
+	inline uint8_t *get_pointer() const
 	{
 		return ptr;
 	}
