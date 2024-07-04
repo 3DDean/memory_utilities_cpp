@@ -135,7 +135,7 @@ struct writer_base
 };
 
 /**
- * @brief A writer for a memory region
+ * @brief A writer for a memory region, with implicit overflow protection
  *
  * This object makes a memory region writable
  *
@@ -176,6 +176,34 @@ struct writer : public region, private writer_base
 	}
 
 	/**
+	 * @brief Write an object to the buffer
+	 *
+	 * @tparam ObjectT Object type
+	 * @param object Object to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	template <typename ObjectT>
+	bool write(const ObjectT &object)
+	{
+		return writer_base::write(region::endPtr, &object, sizeof(ObjectT));
+	}
+
+	/**
+	 * @brief Write a contigious range to the buffer
+	 *
+	 * @tparam RangeT Range Type
+	 * @param range Range to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	template <typename RangeT>
+	bool write(const RangeT &&range) requires std::ranges::contiguous_range<RangeT> && std::ranges::sized_range<RangeT>
+	{
+		return writer_base::write(region::endPtr, range.data(), range.size() * sizeof(typename RangeT::value_type));
+	}
+
+	/**
 	 * @brief Get number of unwritten bytes on buffer
 	 *
 	 * @return size_type bytes available to be written
@@ -207,7 +235,7 @@ struct writer : public region, private writer_base
 
 // TODO add a small write which isn't convertible to a region
 /**
- * @brief A small memory writer
+ * @brief A small memory writer, with internal overflow protection
  *
  * It is the smallest safe memory writer that can be written with pointers
  * You could potentially go smaller with a 32 bit int, but there you run into potential alignment issues
@@ -232,6 +260,34 @@ struct small_writer : private writer_base
 	bool write(const void *src, const uint32_t amount)
 	{
 		return writer_base::write(bufferEnd, src, amount);
+	}
+
+	/**
+	 * @brief Write an object to the buffer
+	 *
+	 * @tparam ObjectT Object type
+	 * @param object Object to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	template <typename ObjectT>
+	bool write(const ObjectT &object)
+	{
+		return writer_base::write(region::endPtr, &object, sizeof(ObjectT));
+	}
+
+	/**
+	 * @brief Write a contigious range to the buffer
+	 *
+	 * @tparam RangeT Range Type
+	 * @param range Range to write
+	 * @return true if data was written
+	 * @return false if buffer is out of space and no data was written
+	 */
+	template <typename RangeT>
+	bool write(const RangeT &&range) requires std::ranges::contiguous_range<RangeT> && std::ranges::sized_range<RangeT>
+	{
+		return writer_base::write(region::endPtr, range.data(), range.size() * sizeof(typename RangeT::value_type));
 	}
 
 	/**
@@ -360,7 +416,7 @@ struct resource
 	/**
 	 * @brief Get a handle for an unsafe memory writer, avoid using this
 	 *
-	 * This should only really be used with fixed size containers, like string_array
+	 * This should only really be used with fixed size ranges, like string_array
 	 * @warning This is a memory unsafe function and probably shouldn't be used
 	 */
 	inline operator unsafe::writer() const
@@ -403,7 +459,7 @@ struct resource_allocator
 	 *
 	 * @param resourceSize Resource Size in bytes
 	 * @param amount Number of resource to allocate
-	 * @param dest Destination container for those resources
+	 * @param dest Destination range for those resources
 	 */
 	void alloc_objects(uint32_t resourceSize, uint32_t amount, auto &&dest)
 	{
@@ -501,12 +557,12 @@ struct resource_pool
 	/**
 	 * @brief Bulk release regions
 	 *
-	 * @param regionContainer A container of regions to be released
+	 * @param regionRange A range of regions to be released
 	 */
-	void release(auto &regionContainer)
+	void release(auto &regionRange)
 	{
-		assert(regionContainer.size() != 0 && "Region Container size cannot be zero");
-		ranges::append_range(available, regionContainer);
+		assert(regionRange.size() != 0 && "Region Range size cannot be zero");
+		ranges::append_range(available, regionRange);
 	}
 
   private:
