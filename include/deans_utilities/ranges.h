@@ -14,7 +14,11 @@ namespace ranges
  *
  * @warning src must not me empty
  */
-inline void append_range(auto &&dest, const std::ranges::sized_range auto &src)
+template <typename DestinationT, typename SourceT>
+inline void append_range(DestinationT &&dest, const SourceT &src) requires
+	std::indirectly_copyable<std::ranges::iterator_t<SourceT>, std::ranges::iterator_t<DestinationT>> &&
+	std::ranges::sized_range<DestinationT> && std::ranges::random_access_range<SourceT> &&
+	std::ranges::sized_range<SourceT> && std::ranges::input_range<SourceT>
 {
 	assert(src.size() != 0 && "Attempt to append empty range");
 
